@@ -19,7 +19,7 @@ defmodule Agent do
       IO.inspect Agent.value(agent)  #=> %[ name: myapp, use_count: 0 ])
   """
   def new(value) do
-    spawn_link(__MODULE__, :loop, [%{value: value, parent: self, children: [], waiting: false}])
+    spawn_link(__MODULE__, :loop, [fresh_context(value)])
   end
 
   @doc """
@@ -33,7 +33,7 @@ defmodule Agent do
 
   """
   def task(fun, value \\ :undefined) when is_function(fun) do
-    agent = spawn_link(__MODULE__, :loop, [%{value: value, parent: self, children: [], waiting: false}])
+    agent = spawn_link(__MODULE__, :loop, [fresh_context(value)])
     update(agent, fun)
     agent
   end
@@ -125,50 +125,73 @@ defmodule Agent do
     end
   end
 
-  def loop(state=%{value: value, parent: parent, children: children, waiting: waiting}) do
+  def loop(state=%{value: value, parent: parent, update_pid: update_pid, waiting: waiting, pending_updates: pending_updates}) do
     receive do
-      {:update, fun} ->
-        {pid,_} = Process.spawn_monitor(__MODULE__, :do_async_update, [self, fun, value])
-        loop(%{state| children: [pid|children]})
+      # no update in progress
+      {:update, fun} when update_pid == nil->
+        pid = Process.spawn_link(__MODULE__, :do_async_update, [self, fun, value])
+        loop(%{state| update_pid: pid})
 
-      {:set_value, new_value} ->
-        loop(%{state | value: new_value})
+
+      # update with update in progress
+      {:update, fun} ->
+        loop(%{state| pending_updates: [fun | pending_updates]})
+
+
+      # nothing in update queue, just return value
+      {:update_done, new_value} when length(pending_updates) == 0 ->
+        if waiting do
+          send(parent, {:value, new_value})
+          state = Map.put(state, :waiting, false)
+        end
+        state = state    # update when Erlang bug fixed...
+                |> Map.put(:value, new_value)
+                |> Map.put(:update_pid, nil)
+        loop(state)
+
+      # something in update queue, so run it after updating value
+      {:update_done, new_value} ->
+        [fun | rest]    = Enum.reverse(pending_updates)
+        pending_updates = Enum.reverse(rest)
+        pid = Process.spawn_link(__MODULE__, :do_async_update, [self, fun, new_value])
+        loop(%{state | value: new_value, update_pid: pid, pending_updates: pending_updates})
+
 
       {:get_value, extractor} ->
         send(parent, {:value, extractor.(value)})
         loop(state)
 
-      {:wait} when length(children) == 0 ->
+      {:wait} when update_pid == nil ->
         send(parent, {:value, value })
         loop(state)
 
       {:wait} ->
         loop(%{state | waiting: true})
 
-      {:DOWN, _ref, :process, pid, :normal} ->
-        children = List.delete(children, pid)
-        if length(children) == 0 && waiting do
-          send(parent, {:value, value})
-#          state = %{ state | waiting: false }
-          state = Map.put(state, :waiting, false)
-        end
-        loop(Map.put(state, :children, children))
-
-      {:DOWN, _ref, :process, pid, reason} ->
-        exit(reason)
+      # {:DOWN, _ref, :process, ^update_pid, :normal} ->
+      #   IO.puts "down for update #{inspect update_pid}"
+      #   loop(state)
+      #
+      # {:DOWN, _ref, :process, _pid, reason} ->
+      #   exit(reason)
 
       other ->
-        IO.puts "other message: #{inspect other}"
+        IO.puts "\n\nother message: #{inspect other}"
+        loop(state)
     end
   end
 
   def do_async_update(agent, fun, value)
   when is_function(fun, 1) do
-    send(agent, {:set_value, fun.(value)})
+    send(agent, {:update_done, fun.(value)})
   end
 
   def do_async_update(agent, fun, _value)
   when is_function(fun, 0) do
-    send(agent, {:set_value, fun.()})
+    send(agent, {:update_done, fun.()})
+  end
+
+  defp fresh_context(value) do
+    %{value: value, parent: self, pending_updates: [], update_pid: nil, waiting: false}
   end
 end
