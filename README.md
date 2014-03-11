@@ -23,26 +23,26 @@ allows you to retrieve just part of the stored state:
 The `Agent.update` function mutates agent state. Pass it a function,
 which it applies to the current state, yielding the new state.
 
-    Agent.update(agent fn val -> Map.put(val, :likes, "Elixir"))
+    Agent.update(agent, fn val -> Map.put(val, :likes, "Elixir"))
 
 Note that _update_ does not return anything meaningful. This is
 because the updating function is run asynchronously—the `update` function
 returns immediately, and calls to `value` will continue to return the
 existing state until this asynchonous function completes.
 
-    Agent.update(agent fn val -> Map.put(val, :likes, "Elixir"))
-    Agent.value(a) #=> %{ name: "Dave", location: "Texas" }
-    Agent.value(a) #=> %{ name: "Dave", location: "Texas" }
+    Agent.update(agent, fn val -> Map.put(val, :likes, "Elixir"))
+    Agent.value(agent) #=> %{ name: "Dave", location: "Texas" }
+    Agent.value(agent) #=> %{ name: "Dave", location: "Texas" }
     # some time passes...
-    Agent.value(a) #=> %{ name: "Dave", location: "Texas", likes: "Elixir" }
+    Agent.value(agent) #=> %{ name: "Dave", location: "Texas", likes: "Elixir" }
 
 If you want to synchonize with this background processing, call
 `Agent.wait`. The `wait` function waits for all pending updates to an agent
 to complete before returning the updated value:
 
-    Agent.update(agent fn val -> Map.put(val, :likes, "Elixir"))
-    Agent.update(agent fn val -> Map.put(val, :name, "José"))
-    Agent.wait(a) #=> %{ name: "José", location: "Texas", likes: "Elixir" }
+    Agent.update(agent, fn val -> Map.put(val, :likes, "Elixir"))
+    Agent.update(agent, fn val -> Map.put(val, :name, "José"))
+    Agent.wait(agent) #=> %{ name: "José", location: "Texas", likes: "Elixir" }
 
 After the call to `wait`, subsequent calls to `value` will also return
 the updated value.
